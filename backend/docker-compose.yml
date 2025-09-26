@@ -1,0 +1,205 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: app_user
+      POSTGRES_HOST: postgres
+      POSTGRES_PASSWORD: your_secure_password
+      POSTGRES_DB: dev
+    expose: 
+      - "8020"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/repository/db:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app_user -d dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: always
+
+  redis:
+    image: redis:7-alpine
+    expose:
+      - "8010"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+    restart: always
+
+  minio:
+    image: minio/minio
+    container_name: minio
+    ports:
+      - "8030:9000"    # S3 API
+      - "8040:9001"    # Admin UI
+    volumes:
+      - ./minio-data:/data
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: miniopassword
+    command: server /data --console-address ":9001"
+
+  backend:
+    image: forus809/beameye:latest
+    expose:
+      - "8099"
+      - "8080"
+    restart: always
+    volumes:
+      - ./backend:/app
+      - ./logs:/backend/logs
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: app_user
+      POSTGRES_PASSWORD: your_secure_password
+      POSTGRES_DB: dev
+      POSTGRES_SSLMODE: disable
+      REDIS_ADDR: redis:6379
+      REDIS_DB: 0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  query_micro:
+    image: forus809/query_micro:latest
+    expose:
+      - "8081"
+    restart: always
+    volumes:
+      - ./backend:/backend
+    working_dir: /backend/query_micro
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: app_user
+      POSTGRES_PASSWORD: your_secure_password
+      POSTGRES_DB: dev
+      POSTGRES_SSLMODE: disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  auth_micro:
+    image: forus809/auth_micro:latest
+    expose:
+      - "8082"
+    restart: always
+    volumes:
+      - ./backend:/backend
+    working_dir: /backend/auth_micro
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: app_user
+      POSTGRES_PASSWORD: your_secure_password
+      POSTGRES_DB: dev
+      POSTGRES_SSLMODE: disable
+      REDIS_ADDR: redis:6379
+      REDIS_DB: 0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  profiles_micro:
+    image: forus809/profiles_micro:latest
+    expose:
+      - "8083"
+    restart: always
+    volumes:
+      - ./backend:/backend
+    working_dir: /backend/profiles_micro
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: app_user
+      POSTGRES_PASSWORD: your_secure_password
+      POSTGRES_DB: dev
+      POSTGRES_SSLMODE: disable
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: miniopassword
+      REDIS_ADDR: redis:6379
+      REDIS_DB: 0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+  
+  users_micro:
+    image: forus809/users_micro:latest
+    expose:
+      - "8085"
+    restart: always
+    volumes:
+      - ./backend:/backend
+    working_dir: /backend/users_micro
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: app_user
+      POSTGRES_PASSWORD: your_secure_password
+      POSTGRES_DB: dev
+      POSTGRES_SSLMODE: disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  prometheus:
+    image: prom/prometheus
+    expose:
+      - "8097"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+  
+  grafana:
+    image: grafana/grafana
+    expose:
+      - "8098"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    depends_on:
+      - prometheus
+
+  nginx:
+    image: nginx:latest
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d  # Конфиги Nginx
+      - ./nginx/certs:/etc/nginx/certs    # Сертификаты HTTPS
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - ./frontend/dist:/usr/share/nginx/html/frontend
+    depends_on:
+      - backend
+      - grafana
+    restart: always
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  midio_data:
+    driver: local
+  grafana-data:
+    driver: local
+
+networks:
+  default:
+    name: app_network
+    driver: bridge
